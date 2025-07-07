@@ -1,0 +1,212 @@
+---
+title: "Exploratory-Regression-Project"
+author: "Stephen Fekete"
+date: "2025-04-25"
+output:
+  html_document:
+    df_print: paged
+---
+
+## Project Summary
+
+This project investigates long-term precipitation patterns using weather station data across South East Queensland. We focus on identifying and analysing stations with over 110 years of continuous precipitation records from the GHCN-D dataset. After filtering metadata for these criteria, we visualise spatial distribution using map-based tools and prepare the data for further statistical analysis. The project leverages R packages including `dplyr`, `ggplot2`, and `ggmap` for data processing and geospatial visualisation.
+
+## Preprocessing the Meta Data
+
+```{r}
+# Load required libraries for data manipulation and visualisation
+library(dplyr)    # For data manipulation (filtering, summarising, etc.)
+library(ggplot2)  # For creating plots and visualisations
+library(ggmap)    # For map-based visualisations using spatial data
+
+# Load datasets from CSV files into data frames
+meta_data <- read.csv("ghcnd_meta_data.csv")    # Metadata about weather stations
+station_data <- read.csv("station_data.csv")    # Daily precipitation data for stations
+readRenviron(".Renviron")
+Sys.getenv("STADIA_API_KEY")
+register_stadiamaps(key = Sys.getenv("STADIA_API_KEY"))
+
+# Check if the Stadia Maps API key has been successfully registered
+has_stadiamaps_key()
+```
+
+```{r}
+# Filter the meta_data for stations that meet specific criteria:
+filtered_meta <- meta_data %>%
+  filter(
+    element == "PRCP",                          # Only include stations that record precipitation
+    (last_year - first_year) >= 110,            # Include stations with at least 110 years of data
+    longitude >= 138 & longitude <= 155,        # Limit to stations within specified longitude range (South East Queensland)
+    latitude >= -29.5 & latitude <= -26         # Limit to stations within specified latitude range (South East Queensland)
+  )
+
+# Display the first few rows of the filtered_meta dataframe to check the results
+head(filtered_meta)
+```
+
+```{r}
+# Count the number of rows (i.e., number of stations) in the filtered_meta dataframe
+# Each row represents one weather station that met all the filter criteria
+nrow(filtered_meta)
+```
+
+## Exploratory Visualisation
+
+Basic Scatterplot of Station Locations and Elevation This scatterplot displays the station locations, with elevation represented through color.
+
+```{r}
+# Create a scatterplot of station locations, with elevation represented by color
+ggplot(filtered_meta, aes(x = longitude, y = latitude, color = elevation)) +
+  geom_point(size = 3) +  # Plot each station as a point, size 3 for visibility
+  labs(
+    title = "Station Locations and Elevation",  # Title of the plot
+    x = "Longitude",                            # Label for the x-axis
+    y = "Latitude",                             # Label for the y-axis
+    color = "Elevation (m)"                     # Legend title for elevation color scale
+  ) +
+  theme_dark()  # Apply a dark theme for visual contrast
+```
+
+## Map-Based Visualisation with Stadia Maps
+
+Map-Based Visualisation Using ggmap. This enhanced visualisation overlays station locations on a map of South East Queensland for better spatial context. Elevation is again color-coded.
+
+```{r}
+# Define the bounding box for the map, slightly larger than SEQ for better visual clarity
+qld <- c(left = 138, bottom = -31, right = 155, top = -24.5)
+
+# Retrieve a terrain map of the specified region from Stadia Maps
+map <- get_stadiamap(bbox = qld, zoom = 6, maptype = "stamen_terrain")
+
+# Overlay station locations onto the map with elevation represented by color
+ggmap(map) +
+  geom_point(
+    data = filtered_meta,                       # Use filtered_meta data for plotting
+    aes(x = longitude, y = latitude, color = elevation),  # Plot longitude vs latitude, color by elevation
+    size = 2                                    # Set point size for readability
+  ) +
+  scale_color_gradient(low = "blue", high = "red") +  # Elevation color gradient: blue for low, red for high
+  labs(
+    title = "Station Locations and Elevation",  # Title of the plot
+    x = "Longitude",                            # X-axis label
+    y = "Latitude",                             # Y-axis label
+    color = "Elevation (m)"                     # Legend title for elevation
+  ) +
+  theme_minimal()  # Use a clean, minimal theme for a clear presentation
+```
+
+## Handling Missing Values
+
+Note on Outlier Impact: As seen in the visualisation and confirmed by the summary of elevation values, there is an outlier at -999m, which likely indicates missing data according to the GHCND documentation. While this outlier appears only once in this subset, it distorts the elevation color gradient, and therefore should be addressed to ensure accurate visualisation and analysis.
+
+```{r}
+# Display the lowest elevation values from filtered_meta to help identify potential outliers
+filtered_meta %>%
+  arrange(elevation) %>%    # Sort the data frame in ascending order of elevation (lowest values first)
+  select(name, elevation) %>%  # Select only the 'name' and 'elevation' columns for display
+  head()                     # Show the first 6 rows (default for head) with the lowest elevation values
+```
+
+## Cleaned Map Without Missing Elevation Values
+
+Cleaned Visualisation Excluding Missing Elevation (-999) To correct the color gradient distortion, the -999 elevation value is excluded based on the dataset guidelines (values of -999 or similar indicate missing data).
+
+```{r}
+# Remove invalid elevation values (-999 indicates missing data according to GHCND documentation)
+filtered_meta_clean <- filtered_meta %>%
+  filter(elevation > -999)  # Keep only rows where elevation is valid (> -999)
+
+# Define the bounding box for the map, slightly larger than SEQ for better visual clarity
+qld <- c(left = 138, bottom = -31, right = 155, top = -24.5)
+
+# Retrieve a terrain map of the specified region from Stadia Maps
+map <- get_stadiamap(bbox = qld, zoom = 6, maptype = "stamen_terrain")
+
+# Plot station locations using cleaned data (without invalid elevation values)
+ggmap(map) +
+  geom_point(
+    data = filtered_meta_clean,                   # Use the cleaned dataset for plotting
+    aes(x = longitude, y = latitude, color = elevation),  # Plot longitude vs latitude, color by elevation
+    size = 2                                      # Set point size for readability
+  ) +
+  scale_color_gradient(low = "blue", high = "red") +  # Elevation color gradient: blue for low, red for high
+  labs(
+    title = "Station Locations and Elevation",    # Title of the plot
+    x = "Longitude",                              # X-axis label
+    y = "Latitude",                               # Y-axis label
+    color = "Elevation (m)"                       # Legend title for color scale
+  ) +
+  theme_minimal()  # Use a clean, minimal theme for a clear presentation
+```
+
+## Merging and Summarising Rainfall Data
+
+```{r}
+# Join the daily station data with the cleaned South East Queensland (SEQ) station metadata
+seq_rain_data <- station_data %>%
+  inner_join(filtered_meta_clean, by = "id")  # Perform an inner join on the 'id' column to combine matching rows
+
+# View the first few rows of the combined dataset to confirm the join was successful
+head(seq_rain_data)
+```
+
+```{r}
+# Calculate the mean and median rainfall for each station, excluding days with zero rainfall
+rain_summary <- seq_rain_data %>%
+  filter(prcp > 0) %>%  # Exclude observations where rainfall is zero to focus on actual rainfall events
+  group_by(name) %>%    # Group the data by station name
+  summarise(
+    mean_rainfall = mean(prcp, na.rm = TRUE),     # Calculate the mean rainfall for each station, ignoring any NA values
+    median_rainfall = median(prcp, na.rm = TRUE)  # Calculate the median rainfall for each station, ignoring any NA values
+  )
+
+# Display the resulting summary table of mean and median rainfall per station
+print(rain_summary)
+```
+
+## Rainfall Distribution by Station
+
+```{r}
+# Filter the data to exclude days with zero rainfall
+rain_data_filtered <- seq_rain_data %>%
+  filter(prcp > 0)  # Keep only observations where rainfall was greater than 0 mm
+
+# Create a boxplot to compare rainfall distributions across stations, with mean values highlighted
+ggplot(rain_data_filtered, aes(x = name, y = prcp)) +
+  geom_boxplot(outlier.color = "red", fill = "lightblue", alpha = 0.7) +  # Draw boxplots for each station, highlight outliers in red
+  stat_summary(fun = mean, geom = "point", shape = 20, size = 3, color = "darkblue") +  # Overlay the mean as dark blue dots
+  labs(
+    title = "Rainfall Distribution by Station",  # Title of the plot
+    x = "Station Name",                         # Label for x-axis (station names)
+    y = "Precipitation (mm)"                    # Label for y-axis (rainfall amount in mm)
+  ) +
+  theme_minimal() +  # Apply a minimal theme for a clean look
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x-axis labels for better readability
+```
+
+This initial boxplot reveals that the data is heavily skewed due to the presence of numerous outliers. By default, boxplots classify values exceeding 1.5 times the interquartile range (IQR) as outliers. While the units of measurement are correct, the natural skewness of rainfall data with many small values and occasional extreme high values leads to a visual imbalance, making the central distribution difficult to interpret.
+
+------------------------------------------------------------------------
+
+To address this, a logarithmic scale is applied to the y-axis. This compresses extreme values while retaining the overall shape of the distribution, providing a clearer and more informative comparison across stations.
+
+## Log-Scaled Visualisation
+
+```{r}
+# Apply a log scale to better visualise skewed rainfall data
+ggplot(rain_data_filtered, aes(x = name, y = prcp)) +
+  geom_boxplot(outlier.color = "red", fill = "lightblue", alpha = 0.7) +  # Draw boxplots for each station, highlight outliers in red
+  stat_summary(fun = mean, geom = "point", shape = 20, size = 3, color = "darkblue") +  # Overlay the mean as dark blue dots
+  scale_y_log10() +  # Log scale compresses high outliers
+  labs(
+    title = "Rainfall Distribution by Station",  # Title of the plot
+    x = "Station Name",                         # Label for x-axis (station names)
+    y = "Precipitation (mm)"                    # Label for y-axis (rainfall amount in mm)
+  ) +
+  theme_minimal() +  # Apply a minimal theme for a clean look
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x-axis labels for better readability
+```
+
+## Conclusion
+
+This project successfully identified and visualized long-term precipitation stations in South East Queensland using the GHCN-D dataset. Spatial and elevation-based mapping revealed potential data anomalies (e.g., -999 elevation values), which were cleaned to ensure reliable interpretation. Rainfall distribution analysis further highlighted the naturally skewed nature of precipitation data. By applying log transformations and summary statistics, clearer patterns emerged that can support further climatological or statistical modelling.
